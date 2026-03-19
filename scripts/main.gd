@@ -695,9 +695,10 @@ func _play_tone(frequency: float, duration: float, amplitude: float) -> void:
 		return
 	var frame_count := int(generator.mix_rate * duration)
 	for i in range(frame_count):
-		var t := float(i) / generator.mix_rate
-		var envelope := 1.0 - (float(i) / max(frame_count, 1))
-		var sample := sin(TAU * frequency * t) * amplitude * envelope
+		var t: float = float(i) / generator.mix_rate
+		var envelope_divisor: float = float(max(frame_count, 1))
+		var envelope: float = 1.0 - (float(i) / envelope_divisor)
+		var sample: float = sin(TAU * frequency * t) * amplitude * envelope
 		audio_playback.push_frame(Vector2(sample, sample))
 
 
