@@ -285,7 +285,7 @@ func _start_round() -> void:
 
 
 func _process_waves() -> void:
-	var cadence := max(0.55, 1.8 - elapsed * 0.012)
+	var cadence: float = max(0.55, 1.8 - elapsed * 0.012)
 	if wave_timer < cadence:
 		return
 	wave_timer = 0.0
@@ -471,9 +471,9 @@ func _spawn_enemy(kind: String) -> void:
 	})
 
 
-func _add_turret(position: Vector2, temporary: bool, ttl: float) -> void:
+func _add_turret(turret_position: Vector2, temporary: bool, ttl: float) -> void:
 	turrets.append({
-		"position": position,
+		"position": turret_position,
 		"range": 260.0,
 		"fire_rate": 0.24 if temporary else 0.32,
 		"cooldown": 0.3,
@@ -573,7 +573,7 @@ func _draw_enemies() -> void:
 	for enemy in enemies:
 		draw_circle(enemy["position"], float(enemy["radius"]), enemy["color"])
 		var bar_width := float(enemy["radius"]) * 2.0
-		var hp_ratio := clamp(float(enemy["hp"]) / max(float(enemy["hp"]), 1.0), 0.0, 1.0)
+		var hp_ratio: float = clamp(float(enemy["hp"]) / max(float(enemy["hp"]), 1.0), 0.0, 1.0)
 		if ENEMY_LIBRARY.has(enemy["type"]):
 			hp_ratio = clamp(float(enemy["hp"]) / float(ENEMY_LIBRARY[enemy["type"]]["hp"]), 0.0, 1.0)
 		draw_rect(Rect2(enemy["position"] + Vector2(-bar_width * 0.5, -float(enemy["radius"]) - 10.0), Vector2(bar_width, 4.0)), Color(0, 0, 0, 0.4), true)
@@ -749,10 +749,10 @@ func _poll_server() -> void:
 			clients.erase(client)
 			raw_http_buffer.erase(client)
 			continue
-		var bytes := client.get_available_bytes()
+		var bytes: int = client.get_available_bytes()
 		if bytes <= 0:
 			continue
-		var incoming := client.get_utf8_string(bytes)
+		var incoming: String = client.get_utf8_string(bytes)
 		raw_http_buffer[client] = String(raw_http_buffer.get(client, "")) + incoming
 		var request_text := String(raw_http_buffer[client])
 		if not request_text.contains("\r\n\r\n"):
