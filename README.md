@@ -6,6 +6,7 @@ Proyek ini sudah disiapkan supaya bisa langsung dipakai sebagai MVP:
 
 - proyek Godot siap import
 - arena dan UI sudah ada
+- sprite gameplay stylized untuk base, turret, bullet, dan enemy
 - UI live panel yang lebih tegas untuk stream
 - wave enemy otomatis
 - queue event dengan cooldown global per action
@@ -25,6 +26,7 @@ Proyek ini sudah disiapkan supaya bisa langsung dipakai sebagai MVP:
 - `tools/send_event.py`: helper kirim event
 - `tools/send_event.ps1`: helper PowerShell
 - `assets/icon.svg`: icon proyek
+- `assets/sprites/`: sprite SVG gameplay yang siap diganti / dikustom
 
 ## Cara Pakai Cepat
 
@@ -122,5 +124,6 @@ PowerShell:
 ## Catatan
 
 - cooldown saat ini masih global per action, belum per user
-- visual sudah lebih siap live, tapi asset gameplay masih stylized placeholder
+- visual gameplay sekarang sudah memakai sprite SVG stylized bawaan proyek
+- kalau ingin style lain, aset di `assets/sprites/` bisa diganti tanpa ubah loop gameplay utama
 - langkah setup detail ada di [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md)
