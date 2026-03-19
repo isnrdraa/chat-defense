@@ -14,6 +14,13 @@ const SUPPORT_COLOR := Color("6fffe9")
 const SABOTAGE_COLOR := Color("ff7f51")
 const PORT := 8787
 const MAX_QUEUE_SIZE := 40
+const BASE_TEXTURE: Texture2D = preload("res://assets/sprites/base_core.svg")
+const TURRET_TEXTURE: Texture2D = preload("res://assets/sprites/turret_guard.svg")
+const BULLET_TEXTURE: Texture2D = preload("res://assets/sprites/bullet_pulse.svg")
+const RUNNER_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_runner.svg")
+const TANK_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_tank.svg")
+const RANGED_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ranged.svg")
+const BOSS_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_boss.svg")
 
 const ACTION_COOLDOWNS := {
 	"heal_base": 0.8,
@@ -548,36 +555,77 @@ func _draw_spawn_rings() -> void:
 	draw_arc(base_position, 260.0, 0.0, TAU, 96, Color(1, 1, 1, 0.05 + ring_pulse * 0.4), 1.0)
 
 
+func _draw_sprite_centered(texture: Texture2D, center: Vector2, size: Vector2, modulate: Color = Color.WHITE) -> void:
+	var draw_rect := Rect2(center - size * 0.5, size)
+	draw_texture_rect(texture, draw_rect, false, modulate)
+
+
+func _enemy_texture(kind: String) -> Texture2D:
+	match kind:
+		"tank":
+			return TANK_TEXTURE
+		"ranged":
+			return RANGED_TEXTURE
+		"boss":
+			return BOSS_TEXTURE
+		_:
+			return RUNNER_TEXTURE
+
+
+func _enemy_sprite_size(kind: String, radius: float) -> Vector2:
+	match kind:
+		"tank":
+			return Vector2.ONE * max(radius * 2.8, 58.0)
+		"ranged":
+			return Vector2.ONE * max(radius * 2.7, 46.0)
+		"boss":
+			return Vector2.ONE * max(radius * 2.9, 92.0)
+		_:
+			return Vector2.ONE * max(radius * 2.8, 34.0)
+
+
 func _draw_base() -> void:
 	var base_color := BASE_COLOR if base_hp > BASE_MAX_HP * 0.3 else BASE_WARNING_COLOR
 	var glow := 0.18 + 0.08 * (0.5 + 0.5 * sin(pulse_time * 4.0))
-	draw_circle(base_position, base_radius, base_color)
+	draw_circle(base_position, base_radius + 2.0, Color("12212f"), true)
 	draw_circle(base_position, base_radius + 12.0, Color(base_color.r, base_color.g, base_color.b, glow))
+	_draw_sprite_centered(BASE_TEXTURE, base_position, Vector2.ONE * 118.0, base_color.lerp(Color.WHITE, 0.15))
 	draw_arc(base_position, base_radius + 20.0, 0.0, TAU, 72, Color(base_color.r, base_color.g, base_color.b, 0.24), 3.0)
 
 
 func _draw_turrets() -> void:
 	for turret in turrets:
+		var turret_position: Vector2 = turret["position"]
 		var turret_color := Color("f4f1de") if not bool(turret["temporary"]) else Color("6fffe9")
-		draw_circle(turret["position"], 14.0, turret_color)
-		draw_circle(turret["position"], 18.0, Color(turret_color.r, turret_color.g, turret_color.b, 0.15))
-		draw_line(turret["position"], turret["position"] + Vector2.UP * 16.0, turret_color, 4.0)
+		var aura_alpha := 0.16 if not bool(turret["temporary"]) else 0.24 + 0.05 * sin(pulse_time * 6.0)
+		draw_circle(turret_position, 20.0, Color(turret_color.r, turret_color.g, turret_color.b, aura_alpha))
+		_draw_sprite_centered(TURRET_TEXTURE, turret_position + Vector2(0, -2), Vector2.ONE * 52.0, turret_color)
 
 
 func _draw_bullets() -> void:
 	for bullet in bullets:
-		draw_circle(bullet["position"], float(bullet["radius"]), BULLET_COLOR)
+		var bullet_position: Vector2 = bullet["position"]
+		var bullet_radius := float(bullet["radius"])
+		draw_circle(bullet_position, bullet_radius + 3.0, Color(BULLET_COLOR.r, BULLET_COLOR.g, BULLET_COLOR.b, 0.22))
+		_draw_sprite_centered(BULLET_TEXTURE, bullet_position, Vector2.ONE * max(bullet_radius * 4.5, 18.0), BULLET_COLOR)
 
 
 func _draw_enemies() -> void:
 	for enemy in enemies:
-		draw_circle(enemy["position"], float(enemy["radius"]), enemy["color"])
+		var enemy_radius := float(enemy["radius"])
+		var enemy_position: Vector2 = enemy["position"] + Vector2(0, sin(pulse_time * 3.2 + float(enemy["id"]) * 0.55) * 2.0)
+		var enemy_color: Color = enemy["color"]
+		var sprite_texture := _enemy_texture(String(enemy["type"]))
+		var sprite_size := _enemy_sprite_size(String(enemy["type"]), enemy_radius)
+		var sprite_modulate := enemy_color.lerp(Color.WHITE, 0.08)
+		draw_circle(enemy_position, enemy_radius + 6.0, Color(enemy_color.r, enemy_color.g, enemy_color.b, 0.10))
+		_draw_sprite_centered(sprite_texture, enemy_position, sprite_size, sprite_modulate)
 		var bar_width := float(enemy["radius"]) * 2.0
 		var hp_ratio: float = clamp(float(enemy["hp"]) / max(float(enemy["hp"]), 1.0), 0.0, 1.0)
 		if ENEMY_LIBRARY.has(enemy["type"]):
 			hp_ratio = clamp(float(enemy["hp"]) / float(ENEMY_LIBRARY[enemy["type"]]["hp"]), 0.0, 1.0)
-		draw_rect(Rect2(enemy["position"] + Vector2(-bar_width * 0.5, -float(enemy["radius"]) - 10.0), Vector2(bar_width, 4.0)), Color(0, 0, 0, 0.4), true)
-		draw_rect(Rect2(enemy["position"] + Vector2(-bar_width * 0.5, -float(enemy["radius"]) - 10.0), Vector2(bar_width * hp_ratio, 4.0)), Color("e0fbfc"), true)
+		draw_rect(Rect2(enemy_position + Vector2(-bar_width * 0.5, -enemy_radius - 14.0), Vector2(bar_width, 4.0)), Color(0, 0, 0, 0.4), true)
+		draw_rect(Rect2(enemy_position + Vector2(-bar_width * 0.5, -enemy_radius - 14.0), Vector2(bar_width * hp_ratio, 4.0)), Color("e0fbfc"), true)
 
 
 func _update_ui() -> void:
