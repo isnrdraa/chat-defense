@@ -1,0 +1,30 @@
+{
+  "comments": {
+    "!heal": "heal_base",
+    "!turret": "spawn_turret_temp",
+    "!bomb": "drop_bomb",
+    "!runner": "spawn_runner_pack",
+    "!tank": "spawn_tank",
+    "!ranged": "spawn_ranged_pair",
+    "!fog": "fog",
+    "!boss": "spawn_boss"
+  },
+  "gifts": {
+    "Rose": "heal_base",
+    "Finger Heart": "spawn_turret_temp",
+    "TikTok": "drop_bomb",
+    "Perfume": "spawn_tank",
+    "Galaxy": "spawn_boss"
+  },
+  "follow_action": "heal_base",
+  "likes": [
+    {
+      "min_count": 50,
+      "action": "heal_base"
+    },
+    {
+      "min_count": 200,
+      "action": "spawn_turret_temp"
+    }
+  ]
+}
