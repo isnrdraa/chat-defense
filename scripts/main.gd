@@ -1,26 +1,20 @@
-extends Node2D
+extends Node3D
 
 const BASE_MAX_HP := 100.0
 const BACKGROUND_COLOR := Color("101820")
-const GRID_COLOR := Color(1, 1, 1, 0.05)
 const BASE_COLOR := Color("ef8354")
 const BASE_WARNING_COLOR := Color("ff595e")
 const BULLET_COLOR := Color("ffe066")
-const PANEL_COLOR := Color("16212b")
+const PANEL_COLOR := Color(0.09, 0.13, 0.17, 0.82)
 const PANEL_BORDER_COLOR := Color("314455")
 const TEXT_PRIMARY := Color("f4f1de")
 const TEXT_MUTED := Color("b8c4cf")
 const SUPPORT_COLOR := Color("6fffe9")
 const SABOTAGE_COLOR := Color("ff7f51")
+const ARENA_SIZE := Vector2(1280, 720)
+const WORLD_SCALE := 0.032
 const PORT := 8787
 const MAX_QUEUE_SIZE := 40
-const BASE_TEXTURE: Texture2D = preload("res://assets/sprites/base_core.svg")
-const TURRET_TEXTURE: Texture2D = preload("res://assets/sprites/turret_guard.svg")
-const BULLET_TEXTURE: Texture2D = preload("res://assets/sprites/bullet_pulse.svg")
-const RUNNER_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_runner.svg")
-const TANK_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_tank.svg")
-const RANGED_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ranged.svg")
-const BOSS_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_boss.svg")
 
 const ACTION_COOLDOWNS := {
 	"heal_base": 0.8,
@@ -69,7 +63,7 @@ const ENEMY_LIBRARY := {
 }
 
 var base_hp := BASE_MAX_HP
-var base_position := Vector2.ZERO
+var base_position := ARENA_SIZE * 0.5
 var base_radius := 42.0
 var game_over := false
 var restart_timer := 0.0
@@ -78,6 +72,8 @@ var pulse_time := 0.0
 var score := 0
 var round_index := 1
 var enemy_id_seed := 0
+var turret_id_seed := 0
+var bullet_id_seed := 0
 var wave_timer := 0.0
 var event_budget_timer := 0.0
 var fog_timer := 0.0
@@ -95,11 +91,29 @@ var saboteur_scores := {}
 var raw_http_buffer := {}
 var action_timers := {}
 var event_router := {}
+var enemy_nodes := {}
+var turret_nodes := {}
+var bullet_nodes := {}
 
 var server := TCPServer.new()
 var clients: Array = []
 
+var world_root: Node3D
+var arena_root: Node3D
+var units_root: Node3D
+var projectile_root: Node3D
+var base_visual: Node3D
+var camera_rig: Node3D
+var battle_camera: Camera3D
+var fog_plane: MeshInstance3D
+var world_environment: WorldEnvironment
+
 var hud_layer: CanvasLayer
+var status_panel: Panel
+var side_panel: Panel
+var bottom_panel: Panel
+var flash_overlay: ColorRect
+var fog_overlay: ColorRect
 var status_label: Label
 var scoreboard_label: Label
 var controls_label: Label
@@ -113,7 +127,7 @@ var audio_playback: AudioStreamGeneratorPlayback
 
 func _ready() -> void:
 	randomize()
-	base_position = get_viewport_rect().size * 0.5
+	_create_world()
 	_create_hud()
 	_setup_audio()
 	_load_event_router()
@@ -133,8 +147,8 @@ func _process(delta: float) -> void:
 		if restart_timer <= 0.0:
 			round_index += 1
 			_start_round()
+		_sync_world()
 		_update_ui()
-		queue_redraw()
 		return
 
 	elapsed += delta
@@ -153,27 +167,8 @@ func _process(delta: float) -> void:
 	_update_bullets(delta)
 	_update_enemies(delta)
 	_cleanup_entities()
+	_sync_world()
 	_update_ui()
-	queue_redraw()
-
-
-func _draw() -> void:
-	var view_size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, view_size), BACKGROUND_COLOR, true)
-	_draw_backdrop(view_size)
-	_draw_grid(view_size)
-	draw_set_transform(camera_offset, 0.0, Vector2.ONE)
-	_draw_spawn_rings()
-	_draw_turrets()
-	_draw_bullets()
-	_draw_enemies()
-	_draw_base()
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	if fog_timer > 0.0:
-		draw_rect(Rect2(Vector2.ZERO, view_size), Color(0, 0, 0, 0.32), true)
-	if alert_flash_timer > 0.0:
-		var alpha := 0.1 + 0.12 * sin(pulse_time * 24.0)
-		draw_rect(Rect2(Vector2.ZERO, view_size), Color(1, 0.35, 0.4, alpha), true)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -199,9 +194,153 @@ func _unhandled_input(event: InputEvent) -> void:
 				_start_round()
 
 
+func _create_world() -> void:
+	world_root = Node3D.new()
+	add_child(world_root)
+
+	world_environment = WorldEnvironment.new()
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = BACKGROUND_COLOR
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color("dbe8ef")
+	environment.ambient_light_energy = 1.25
+	environment.glow_enabled = true
+	environment.glow_intensity = 0.14
+	environment.tonemap_mode = Environment.TONE_MAPPER_ACES
+	world_environment.environment = environment
+	world_root.add_child(world_environment)
+
+	camera_rig = Node3D.new()
+	camera_rig.position = Vector3(0, 0, 1.8)
+	world_root.add_child(camera_rig)
+
+	battle_camera = Camera3D.new()
+	battle_camera.current = true
+	battle_camera.fov = 42.0
+	battle_camera.position = Vector3(0, 18.5, 16.0)
+	battle_camera.rotation_degrees = Vector3(-52, 0, 0)
+	camera_rig.add_child(battle_camera)
+
+	var sun := DirectionalLight3D.new()
+	sun.light_energy = 2.0
+	sun.shadow_enabled = true
+	sun.rotation_degrees = Vector3(-58, -32, 0)
+	world_root.add_child(sun)
+
+	var fill_light := OmniLight3D.new()
+	fill_light.light_color = Color("6fffe9")
+	fill_light.light_energy = 0.55
+	fill_light.omni_range = 42.0
+	fill_light.position = Vector3(-8, 6, -5)
+	world_root.add_child(fill_light)
+
+	var warm_light := OmniLight3D.new()
+	warm_light.light_color = Color("ff9a6a")
+	warm_light.light_energy = 0.45
+	warm_light.omni_range = 44.0
+	warm_light.position = Vector3(8, 6, -3)
+	world_root.add_child(warm_light)
+
+	arena_root = Node3D.new()
+	world_root.add_child(arena_root)
+
+	units_root = Node3D.new()
+	world_root.add_child(units_root)
+
+	projectile_root = Node3D.new()
+	world_root.add_child(projectile_root)
+
+	_build_arena()
+
+	base_visual = _make_base_node()
+	units_root.add_child(base_visual)
+
+
+func _build_arena() -> void:
+	var arena_width: float = ARENA_SIZE.x * WORLD_SCALE
+	var arena_depth: float = ARENA_SIZE.y * WORLD_SCALE
+
+	var ground_mesh := PlaneMesh.new()
+	ground_mesh.size = Vector2(arena_width, arena_depth)
+	var ground := _mesh_instance(ground_mesh, Color("223240"), 0.0, 0.88, true)
+	ground.rotation_degrees = Vector3(-90, 0, 0)
+	arena_root.add_child(ground)
+
+	var lane_mesh := PlaneMesh.new()
+	lane_mesh.size = Vector2(arena_width * 0.74, arena_depth * 0.36)
+	var lane := _mesh_instance(lane_mesh, Color(0.35, 0.57, 0.66, 0.22), 0.1, 0.35, true)
+	lane.position = Vector3(0, 0.02, 0)
+	lane.rotation_degrees = Vector3(-90, 0, 0)
+	arena_root.add_child(lane)
+
+	var center_glow_mesh := CylinderMesh.new()
+	center_glow_mesh.top_radius = 3.9
+	center_glow_mesh.bottom_radius = 3.9
+	center_glow_mesh.height = 0.08
+	var center_glow := _mesh_instance(center_glow_mesh, Color(0.44, 1.0, 0.91, 0.18), 0.3, 0.2, true)
+	center_glow.position = Vector3(0, 0.05, 0)
+	arena_root.add_child(center_glow)
+
+	for offset in [-7.8, 7.8]:
+		var tower_pad_mesh := CylinderMesh.new()
+		tower_pad_mesh.top_radius = 1.25
+		tower_pad_mesh.bottom_radius = 1.25
+		tower_pad_mesh.height = 0.12
+		var tower_pad := _mesh_instance(tower_pad_mesh, Color("20303d"), 0.0, 0.86, false)
+		tower_pad.position = Vector3(offset, 0.06, -1.15)
+		arena_root.add_child(tower_pad)
+
+	var wall_mesh := BoxMesh.new()
+	wall_mesh.size = Vector3(arena_width + 1.0, 0.7, 0.55)
+	var top_wall := _mesh_instance(wall_mesh, Color("3b4f61"), 0.0, 0.7, false)
+	top_wall.position = Vector3(0, 0.35, -arena_depth * 0.5 - 0.1)
+	arena_root.add_child(top_wall)
+	var bottom_wall := _mesh_instance(wall_mesh, Color("3b4f61"), 0.0, 0.7, false)
+	bottom_wall.position = Vector3(0, 0.35, arena_depth * 0.5 + 0.1)
+	arena_root.add_child(bottom_wall)
+
+	var side_wall_mesh := BoxMesh.new()
+	side_wall_mesh.size = Vector3(0.55, 0.7, arena_depth + 0.35)
+	var left_wall := _mesh_instance(side_wall_mesh, Color("3b4f61"), 0.0, 0.7, false)
+	left_wall.position = Vector3(-arena_width * 0.5 - 0.1, 0.35, 0)
+	arena_root.add_child(left_wall)
+	var right_wall := _mesh_instance(side_wall_mesh, Color("3b4f61"), 0.0, 0.7, false)
+	right_wall.position = Vector3(arena_width * 0.5 + 0.1, 0.35, 0)
+	arena_root.add_child(right_wall)
+
+	fog_plane = _mesh_instance(ground_mesh, Color(0, 0, 0, 0.0), 0.0, 1.0, true)
+	fog_plane.rotation_degrees = Vector3(-90, 0, 0)
+	fog_plane.position = Vector3(0, 6.5, 0)
+	fog_plane.visible = false
+	fog_plane.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	arena_root.add_child(fog_plane)
+
+
 func _create_hud() -> void:
 	hud_layer = CanvasLayer.new()
 	add_child(hud_layer)
+
+	status_panel = _make_panel(Vector2(10, 8), Vector2(450, 400))
+	hud_layer.add_child(status_panel)
+
+	side_panel = _make_panel(Vector2(920, 8), Vector2(345, 610))
+	hud_layer.add_child(side_panel)
+
+	bottom_panel = _make_panel(Vector2(10, 644), Vector2(1255, 56))
+	hud_layer.add_child(bottom_panel)
+
+	var side_separator_top := ColorRect.new()
+	side_separator_top.position = Vector2(920, 54)
+	side_separator_top.size = Vector2(345, 2)
+	side_separator_top.color = PANEL_BORDER_COLOR
+	hud_layer.add_child(side_separator_top)
+
+	var side_separator_bottom := ColorRect.new()
+	side_separator_bottom.position = Vector2(920, 302)
+	side_separator_bottom.size = Vector2(345, 2)
+	side_separator_bottom.color = PANEL_BORDER_COLOR
+	hud_layer.add_child(side_separator_bottom)
 
 	title_label = Label.new()
 	title_label.position = Vector2(18, 10)
@@ -253,6 +392,36 @@ func _create_hud() -> void:
 	alert_label.modulate = Color(1, 1, 1, 0)
 	hud_layer.add_child(alert_label)
 
+	fog_overlay = ColorRect.new()
+	fog_overlay.position = Vector2.ZERO
+	fog_overlay.size = ARENA_SIZE
+	fog_overlay.color = Color(0, 0, 0, 0)
+	fog_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_layer.add_child(fog_overlay)
+
+	flash_overlay = ColorRect.new()
+	flash_overlay.position = Vector2.ZERO
+	flash_overlay.size = ARENA_SIZE
+	flash_overlay.color = Color(1, 0.35, 0.4, 0)
+	flash_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_layer.add_child(flash_overlay)
+
+
+func _make_panel(panel_position: Vector2, panel_size: Vector2) -> Panel:
+	var panel := Panel.new()
+	panel.position = panel_position
+	panel.size = panel_size
+
+	var border := StyleBoxFlat.new()
+	border.bg_color = PANEL_COLOR
+	border.border_width_left = 2
+	border.border_width_top = 2
+	border.border_width_right = 2
+	border.border_width_bottom = 2
+	border.border_color = PANEL_BORDER_COLOR
+	panel.add_theme_stylebox_override("panel", border)
+	return panel
+
 
 func _setup_audio() -> void:
 	audio_player = AudioStreamPlayer.new()
@@ -272,6 +441,8 @@ func _start_round() -> void:
 	game_over = false
 	restart_timer = 0.0
 	enemy_id_seed = 0
+	turret_id_seed = 0
+	bullet_id_seed = 0
 	wave_timer = 0.0
 	event_budget_timer = 0.0
 	fog_timer = 0.0
@@ -286,9 +457,11 @@ func _start_round() -> void:
 	saboteur_scores.clear()
 	action_timers.clear()
 	turrets = []
+	_clear_visuals()
 	_add_turret(base_position + Vector2(-86, -40), false, 0.0)
 	_add_turret(base_position + Vector2(86, -40), false, 0.0)
 	_push_feed("Round %d started" % round_index)
+	_sync_world()
 
 
 func _process_waves() -> void:
@@ -383,7 +556,9 @@ func _update_turrets(delta: float) -> void:
 		turret["cooldown"] = turret["fire_rate"]
 		var to_target: Vector2 = target["position"] - turret["position"]
 		var velocity := to_target.normalized() * float(turret["bullet_speed"])
+		bullet_id_seed += 1
 		bullets.append({
+			"id": bullet_id_seed,
 			"position": turret["position"],
 			"velocity": velocity,
 			"damage": turret["damage"],
@@ -479,7 +654,9 @@ func _spawn_enemy(kind: String) -> void:
 
 
 func _add_turret(turret_position: Vector2, temporary: bool, ttl: float) -> void:
+	turret_id_seed += 1
 	turrets.append({
+		"id": turret_id_seed,
 		"position": turret_position,
 		"range": 260.0,
 		"fire_rate": 0.24 if temporary else 0.32,
@@ -492,16 +669,15 @@ func _add_turret(turret_position: Vector2, temporary: bool, ttl: float) -> void:
 
 
 func _pick_spawn_position() -> Vector2:
-	var size := get_viewport_rect().size
 	match randi() % 4:
 		0:
-			return Vector2(randf_range(0.0, size.x), -20.0)
+			return Vector2(randf_range(0.0, ARENA_SIZE.x), -20.0)
 		1:
-			return Vector2(size.x + 20.0, randf_range(0.0, size.y))
+			return Vector2(ARENA_SIZE.x + 20.0, randf_range(0.0, ARENA_SIZE.y))
 		2:
-			return Vector2(randf_range(0.0, size.x), size.y + 20.0)
+			return Vector2(randf_range(0.0, ARENA_SIZE.x), ARENA_SIZE.y + 20.0)
 		_:
-			return Vector2(-20.0, randf_range(0.0, size.y))
+			return Vector2(-20.0, randf_range(0.0, ARENA_SIZE.y))
 
 
 func _find_nearest_enemy(origin: Vector2, max_range: float) -> Dictionary:
@@ -529,108 +705,350 @@ func _damage_enemies_in_radius(center: Vector2, radius: float, damage: float) ->
 	return kills
 
 
-func _draw_grid(view_size: Vector2) -> void:
-	for x in range(0, int(view_size.x), 64):
-		draw_line(Vector2(x, 0), Vector2(x, view_size.y), GRID_COLOR, 1.0)
-	for y in range(0, int(view_size.y), 64):
-		draw_line(Vector2(0, y), Vector2(view_size.x, y), GRID_COLOR, 1.0)
+func _sync_world() -> void:
+	_sync_base_visual()
+	_sync_turret_visuals()
+	_sync_enemy_visuals()
+	_sync_bullet_visuals()
+	_sync_overlays()
 
 
-func _draw_backdrop(view_size: Vector2) -> void:
-	draw_circle(Vector2(210, 120), 180.0, Color(0.07, 0.45, 0.44, 0.10))
-	draw_circle(Vector2(view_size.x - 120, 160), 220.0, Color(0.93, 0.51, 0.32, 0.08))
-	draw_rect(Rect2(10, 8, 450, 400), PANEL_COLOR, true)
-	draw_rect(Rect2(10, 8, 450, 400), PANEL_BORDER_COLOR, false, 2.0)
-	draw_rect(Rect2(920, 8, 345, 610), PANEL_COLOR, true)
-	draw_rect(Rect2(920, 8, 345, 610), PANEL_BORDER_COLOR, false, 2.0)
-	draw_rect(Rect2(10, 644, 1255, 56), PANEL_COLOR, true)
-	draw_rect(Rect2(10, 644, 1255, 56), PANEL_BORDER_COLOR, false, 2.0)
-	draw_line(Vector2(920, 54), Vector2(1265, 54), PANEL_BORDER_COLOR, 2.0)
-	draw_line(Vector2(920, 302), Vector2(1265, 302), PANEL_BORDER_COLOR, 2.0)
+func _sync_base_visual() -> void:
+	base_visual.position = _world_pos(base_position, 0.24)
+	var hp_ratio: float = clamp(base_hp / BASE_MAX_HP, 0.0, 1.0)
+	var core := base_visual.get_node("Core") as MeshInstance3D
+	var core_material := core.material_override as StandardMaterial3D
+	var core_color := BASE_COLOR if hp_ratio > 0.3 else BASE_WARNING_COLOR
+	core_material.albedo_color = core_color
+	core_material.emission = core_color
+	core_material.emission_energy_multiplier = 0.55 + (1.0 - hp_ratio) * 0.55
+	base_visual.rotation.y = pulse_time * 0.32
+	base_visual.scale = Vector3.ONE * (1.0 + sin(pulse_time * 2.4) * 0.015)
 
 
-func _draw_spawn_rings() -> void:
-	var ring_pulse := 0.04 + 0.03 * (0.5 + 0.5 * sin(pulse_time * 2.5))
-	draw_arc(base_position, 140.0, 0.0, TAU, 96, Color(1, 1, 1, 0.10 + ring_pulse), 2.0)
-	draw_arc(base_position, 260.0, 0.0, TAU, 96, Color(1, 1, 1, 0.05 + ring_pulse * 0.4), 1.0)
-
-
-func _draw_sprite_centered(texture: Texture2D, center: Vector2, size: Vector2, modulate: Color = Color.WHITE) -> void:
-	var draw_rect := Rect2(center - size * 0.5, size)
-	draw_texture_rect(texture, draw_rect, false, modulate)
-
-
-func _enemy_texture(kind: String) -> Texture2D:
-	match kind:
-		"tank":
-			return TANK_TEXTURE
-		"ranged":
-			return RANGED_TEXTURE
-		"boss":
-			return BOSS_TEXTURE
-		_:
-			return RUNNER_TEXTURE
-
-
-func _enemy_sprite_size(kind: String, radius: float) -> Vector2:
-	match kind:
-		"tank":
-			return Vector2.ONE * max(radius * 2.8, 58.0)
-		"ranged":
-			return Vector2.ONE * max(radius * 2.7, 46.0)
-		"boss":
-			return Vector2.ONE * max(radius * 2.9, 92.0)
-		_:
-			return Vector2.ONE * max(radius * 2.8, 34.0)
-
-
-func _draw_base() -> void:
-	var base_color := BASE_COLOR if base_hp > BASE_MAX_HP * 0.3 else BASE_WARNING_COLOR
-	var glow := 0.18 + 0.08 * (0.5 + 0.5 * sin(pulse_time * 4.0))
-	draw_circle(base_position, base_radius + 2.0, Color("12212f"), true)
-	draw_circle(base_position, base_radius + 12.0, Color(base_color.r, base_color.g, base_color.b, glow))
-	_draw_sprite_centered(BASE_TEXTURE, base_position, Vector2.ONE * 118.0, base_color.lerp(Color.WHITE, 0.15))
-	draw_arc(base_position, base_radius + 20.0, 0.0, TAU, 72, Color(base_color.r, base_color.g, base_color.b, 0.24), 3.0)
-
-
-func _draw_turrets() -> void:
+func _sync_turret_visuals() -> void:
+	var active_ids := {}
 	for turret in turrets:
-		var turret_position: Vector2 = turret["position"]
-		var turret_color := Color("f4f1de") if not bool(turret["temporary"]) else Color("6fffe9")
-		var aura_alpha := 0.16 if not bool(turret["temporary"]) else 0.24 + 0.05 * sin(pulse_time * 6.0)
-		draw_circle(turret_position, 20.0, Color(turret_color.r, turret_color.g, turret_color.b, aura_alpha))
-		_draw_sprite_centered(TURRET_TEXTURE, turret_position + Vector2(0, -2), Vector2.ONE * 52.0, turret_color)
+		var turret_id := int(turret["id"])
+		active_ids[turret_id] = true
+		var turret_node: Node3D = turret_nodes.get(turret_id)
+		if turret_node == null:
+			turret_node = _make_turret_node(bool(turret["temporary"]))
+			turret_nodes[turret_id] = turret_node
+			units_root.add_child(turret_node)
+		var bob := 0.08 * sin(pulse_time * 3.2 + float(turret_id))
+		turret_node.position = _world_pos(turret["position"], 0.18 + bob)
+		var turret_head := turret_node.get_node("Head") as Node3D
+		var target := _find_nearest_enemy(turret["position"], turret["range"])
+		if not target.is_empty():
+			var look_target := _world_pos(target["position"], turret_node.position.y)
+			turret_head.look_at(look_target, Vector3.UP, true)
+		var glow := turret_node.get_node("Glow") as MeshInstance3D
+		var glow_material := glow.material_override as StandardMaterial3D
+		if bool(turret["temporary"]):
+			glow_material.albedo_color = Color(0.44, 1.0, 0.91, 0.28 + 0.08 * sin(pulse_time * 6.0))
+		else:
+			glow_material.albedo_color = Color(0.96, 0.95, 0.87, 0.18)
+	for turret_id in turret_nodes.keys().duplicate():
+		if not active_ids.has(turret_id):
+			var old_turret: Node3D = turret_nodes[turret_id]
+			old_turret.queue_free()
+			turret_nodes.erase(turret_id)
 
 
-func _draw_bullets() -> void:
-	for bullet in bullets:
-		var bullet_position: Vector2 = bullet["position"]
-		var bullet_radius := float(bullet["radius"])
-		draw_circle(bullet_position, bullet_radius + 3.0, Color(BULLET_COLOR.r, BULLET_COLOR.g, BULLET_COLOR.b, 0.22))
-		_draw_sprite_centered(BULLET_TEXTURE, bullet_position, Vector2.ONE * max(bullet_radius * 4.5, 18.0), BULLET_COLOR)
-
-
-func _draw_enemies() -> void:
+func _sync_enemy_visuals() -> void:
+	var active_ids := {}
 	for enemy in enemies:
-		var enemy_radius := float(enemy["radius"])
-		var enemy_position: Vector2 = enemy["position"] + Vector2(0, sin(pulse_time * 3.2 + float(enemy["id"]) * 0.55) * 2.0)
-		var enemy_color: Color = enemy["color"]
-		var sprite_texture := _enemy_texture(String(enemy["type"]))
-		var sprite_size := _enemy_sprite_size(String(enemy["type"]), enemy_radius)
-		var sprite_modulate := enemy_color.lerp(Color.WHITE, 0.08)
-		draw_circle(enemy_position, enemy_radius + 6.0, Color(enemy_color.r, enemy_color.g, enemy_color.b, 0.10))
-		_draw_sprite_centered(sprite_texture, enemy_position, sprite_size, sprite_modulate)
-		var bar_width := float(enemy["radius"]) * 2.0
-		var hp_ratio: float = clamp(float(enemy["hp"]) / max(float(enemy["hp"]), 1.0), 0.0, 1.0)
-		if ENEMY_LIBRARY.has(enemy["type"]):
-			hp_ratio = clamp(float(enemy["hp"]) / float(ENEMY_LIBRARY[enemy["type"]]["hp"]), 0.0, 1.0)
-		draw_rect(Rect2(enemy_position + Vector2(-bar_width * 0.5, -enemy_radius - 14.0), Vector2(bar_width, 4.0)), Color(0, 0, 0, 0.4), true)
-		draw_rect(Rect2(enemy_position + Vector2(-bar_width * 0.5, -enemy_radius - 14.0), Vector2(bar_width * hp_ratio, 4.0)), Color("e0fbfc"), true)
+		var enemy_id := int(enemy["id"])
+		active_ids[enemy_id] = true
+		var enemy_node: Node3D = enemy_nodes.get(enemy_id)
+		if enemy_node == null:
+			enemy_node = _make_enemy_node(String(enemy["type"]), enemy["color"])
+			enemy_nodes[enemy_id] = enemy_node
+			units_root.add_child(enemy_node)
+		var hover := 0.08 * sin(pulse_time * 4.2 + float(enemy_id) * 0.4)
+		enemy_node.position = _world_pos(enemy["position"], 0.2 + hover)
+		var base_world := _world_pos(base_position, enemy_node.position.y)
+		enemy_node.look_at(Vector3(base_world.x, enemy_node.position.y, base_world.z), Vector3.UP, true)
+		var hp_ratio: float = clamp(float(enemy["hp"]) / float(ENEMY_LIBRARY[String(enemy["type"])]["hp"]), 0.0, 1.0)
+		var hp_fill := enemy_node.get_node("HP/Fill") as MeshInstance3D
+		hp_fill.scale.x = max(hp_ratio, 0.02)
+		hp_fill.position.x = -0.6 + hp_ratio * 0.6
+	for enemy_id in enemy_nodes.keys().duplicate():
+		if not active_ids.has(enemy_id):
+			var old_enemy: Node3D = enemy_nodes[enemy_id]
+			old_enemy.queue_free()
+			enemy_nodes.erase(enemy_id)
+
+
+func _sync_bullet_visuals() -> void:
+	var active_ids := {}
+	for bullet in bullets:
+		var bullet_id := int(bullet["id"])
+		active_ids[bullet_id] = true
+		var bullet_node: Node3D = bullet_nodes.get(bullet_id)
+		if bullet_node == null:
+			bullet_node = _make_bullet_node()
+			bullet_nodes[bullet_id] = bullet_node
+			projectile_root.add_child(bullet_node)
+		bullet_node.position = _world_pos(bullet["position"], 0.52)
+		bullet_node.scale = Vector3.ONE * (0.85 + 0.2 * sin(pulse_time * 14.0 + float(bullet_id)))
+	for bullet_id in bullet_nodes.keys().duplicate():
+		if not active_ids.has(bullet_id):
+			var old_bullet: Node3D = bullet_nodes[bullet_id]
+			old_bullet.queue_free()
+			bullet_nodes.erase(bullet_id)
+
+
+func _sync_overlays() -> void:
+	camera_rig.position = Vector3(camera_offset.x * WORLD_SCALE * 0.18, 0, 1.8 + camera_offset.y * WORLD_SCALE * 0.12)
+	if fog_timer > 0.0:
+		var fog_alpha: float = 0.18 + 0.1 * sin(pulse_time * 2.0)
+		fog_plane.visible = true
+		var fog_material := fog_plane.material_override as StandardMaterial3D
+		fog_material.albedo_color = Color(0.02, 0.04, 0.06, fog_alpha)
+		fog_overlay.color = Color(0, 0, 0, 0.16)
+	else:
+		fog_plane.visible = false
+		fog_overlay.color = Color(0, 0, 0, 0)
+	if alert_flash_timer > 0.0:
+		var flash_alpha := 0.1 + 0.12 * sin(pulse_time * 24.0)
+		flash_overlay.color = Color(1, 0.35, 0.4, flash_alpha)
+	else:
+		flash_overlay.color = Color(1, 0.35, 0.4, 0)
+
+
+func _make_base_node() -> Node3D:
+	var root := Node3D.new()
+
+	var foundation_mesh := CylinderMesh.new()
+	foundation_mesh.top_radius = 1.85
+	foundation_mesh.bottom_radius = 2.05
+	foundation_mesh.height = 0.42
+	var foundation := _mesh_instance(foundation_mesh, Color("263847"), 0.0, 0.78, false)
+	root.add_child(foundation)
+
+	var ring_mesh := CylinderMesh.new()
+	ring_mesh.top_radius = 2.35
+	ring_mesh.bottom_radius = 2.35
+	ring_mesh.height = 0.08
+	var ring := _mesh_instance(ring_mesh, Color(0.44, 1.0, 0.91, 0.18), 0.35, 0.22, true)
+	ring.position = Vector3(0, -0.12, 0)
+	root.add_child(ring)
+
+	var core_mesh := SphereMesh.new()
+	core_mesh.radius = 0.92
+	core_mesh.height = 1.7
+	var core := _mesh_instance(core_mesh, BASE_COLOR, 0.65, 0.2, false)
+	core.name = "Core"
+	core.position = Vector3(0, 0.92, 0)
+	root.add_child(core)
+
+	var crown_mesh := BoxMesh.new()
+	crown_mesh.size = Vector3(0.28, 1.45, 0.28)
+	for angle in [0.0, 45.0, 90.0, 135.0]:
+		var crown := _mesh_instance(crown_mesh, Color("ffe5d6"), 0.0, 0.28, false)
+		crown.position = Vector3(0, 1.15, 0)
+		crown.rotation_degrees = Vector3(0, angle, 0)
+		root.add_child(crown)
+
+	return root
+
+
+func _make_turret_node(temporary: bool) -> Node3D:
+	var root := Node3D.new()
+
+	var glow_mesh := CylinderMesh.new()
+	glow_mesh.top_radius = 0.82
+	glow_mesh.bottom_radius = 0.82
+	glow_mesh.height = 0.06
+	var glow_color := Color(0.44, 1.0, 0.91, 0.24) if temporary else Color(0.96, 0.95, 0.87, 0.18)
+	var glow := _mesh_instance(glow_mesh, glow_color, 0.25, 0.16, true)
+	glow.name = "Glow"
+	glow.position = Vector3(0, -0.07, 0)
+	root.add_child(glow)
+
+	var base_mesh := CylinderMesh.new()
+	base_mesh.top_radius = 0.48
+	base_mesh.bottom_radius = 0.58
+	base_mesh.height = 0.46
+	var base_color := Color("6fffe9") if temporary else Color("f4f1de")
+	var base := _mesh_instance(base_mesh, base_color, 0.1 if temporary else 0.0, 0.46, false)
+	base.position = Vector3(0, 0.2, 0)
+	root.add_child(base)
+
+	var head := Node3D.new()
+	head.name = "Head"
+	head.position = Vector3(0, 0.48, 0)
+	root.add_child(head)
+
+	var head_mesh := BoxMesh.new()
+	head_mesh.size = Vector3(0.42, 0.26, 0.54)
+	var head_body := _mesh_instance(head_mesh, Color("314455"), 0.0, 0.48, false)
+	head.add_child(head_body)
+
+	var barrel_mesh := CylinderMesh.new()
+	barrel_mesh.top_radius = 0.08
+	barrel_mesh.bottom_radius = 0.08
+	barrel_mesh.height = 0.9
+	var barrel := _mesh_instance(barrel_mesh, base_color, 0.08 if temporary else 0.0, 0.3, false)
+	barrel.rotation_degrees = Vector3(90, 0, 0)
+	barrel.position = Vector3(0, 0.02, -0.5)
+	head.add_child(barrel)
+
+	return root
+
+
+func _make_enemy_node(kind: String, tint: Color) -> Node3D:
+	var root := Node3D.new()
+
+	match kind:
+		"tank":
+			var body_mesh := BoxMesh.new()
+			body_mesh.size = Vector3(1.2, 0.8, 1.45)
+			var body := _mesh_instance(body_mesh, tint, 0.18, 0.58, false)
+			body.position = Vector3(0, 0.46, 0)
+			root.add_child(body)
+
+			var turret_mesh := CylinderMesh.new()
+			turret_mesh.top_radius = 0.34
+			turret_mesh.bottom_radius = 0.42
+			turret_mesh.height = 0.42
+			var turret := _mesh_instance(turret_mesh, Color("552214"), 0.0, 0.64, false)
+			turret.position = Vector3(0, 0.95, -0.08)
+			root.add_child(turret)
+
+			var horn_mesh := BoxMesh.new()
+			horn_mesh.size = Vector3(0.2, 0.2, 0.8)
+			var horn := _mesh_instance(horn_mesh, Color("ffe3d9"), 0.0, 0.28, false)
+			horn.position = Vector3(0, 0.96, -0.65)
+			root.add_child(horn)
+		"ranged":
+			var body_capsule := CapsuleMesh.new()
+			body_capsule.radius = 0.42
+			body_capsule.height = 1.15
+			var body_ranged := _mesh_instance(body_capsule, tint, 0.24, 0.42, false)
+			body_ranged.position = Vector3(0, 0.72, 0)
+			root.add_child(body_ranged)
+
+			var orb_mesh := SphereMesh.new()
+			orb_mesh.radius = 0.18
+			orb_mesh.height = 0.36
+			var orb := _mesh_instance(orb_mesh, Color("e7fffb"), 0.7, 0.1, false)
+			orb.position = Vector3(0, 1.38, -0.12)
+			root.add_child(orb)
+		"boss":
+			var core_mesh := SphereMesh.new()
+			core_mesh.radius = 0.88
+			core_mesh.height = 1.76
+			var core := _mesh_instance(core_mesh, tint, 0.52, 0.22, false)
+			core.position = Vector3(0, 1.08, 0)
+			root.add_child(core)
+
+			var crown_mesh := BoxMesh.new()
+			crown_mesh.size = Vector3(0.16, 0.86, 0.16)
+			for angle in [0.0, 45.0, 90.0, 135.0]:
+				var spike := _mesh_instance(crown_mesh, Color("ffd3e6"), 0.1, 0.24, false)
+				spike.position = Vector3(0, 1.8, 0)
+				spike.rotation_degrees = Vector3(18, angle, 0)
+				root.add_child(spike)
+		_:
+			var runner_capsule := CapsuleMesh.new()
+			runner_capsule.radius = 0.3
+			runner_capsule.height = 0.92
+			var runner_body := _mesh_instance(runner_capsule, tint, 0.16, 0.35, false)
+			runner_body.position = Vector3(0, 0.58, 0)
+			root.add_child(runner_body)
+
+			var runner_head_mesh := SphereMesh.new()
+			runner_head_mesh.radius = 0.18
+			runner_head_mesh.height = 0.36
+			var runner_head := _mesh_instance(runner_head_mesh, Color("e9fff1"), 0.0, 0.2, false)
+			runner_head.position = Vector3(0, 1.1, -0.08)
+			root.add_child(runner_head)
+
+	var hp_root := Node3D.new()
+	hp_root.name = "HP"
+	hp_root.position = Vector3(0, 1.8 if kind == "boss" else 1.35, 0)
+	root.add_child(hp_root)
+
+	var hp_back_mesh := BoxMesh.new()
+	hp_back_mesh.size = Vector3(1.2, 0.08, 0.08)
+	var hp_back := _mesh_instance(hp_back_mesh, Color(0, 0, 0, 0.42), 0.0, 0.9, true)
+	hp_root.add_child(hp_back)
+
+	var hp_fill_mesh := BoxMesh.new()
+	hp_fill_mesh.size = Vector3(1.2, 0.08, 0.08)
+	var hp_fill := _mesh_instance(hp_fill_mesh, Color("e0fbfc"), 0.2, 0.3, false)
+	hp_fill.name = "Fill"
+	hp_fill.position = Vector3(0, 0.01, -0.01)
+	hp_root.add_child(hp_fill)
+
+	return root
+
+
+func _make_bullet_node() -> Node3D:
+	var root := Node3D.new()
+	var sphere_mesh := SphereMesh.new()
+	sphere_mesh.radius = 0.16
+	sphere_mesh.height = 0.32
+	var sphere := _mesh_instance(sphere_mesh, BULLET_COLOR, 0.95, 0.08, false)
+	root.add_child(sphere)
+
+	var halo_mesh := SphereMesh.new()
+	halo_mesh.radius = 0.24
+	halo_mesh.height = 0.48
+	var halo := _mesh_instance(halo_mesh, Color(BULLET_COLOR.r, BULLET_COLOR.g, BULLET_COLOR.b, 0.16), 0.4, 0.05, true)
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(halo)
+	return root
+
+
+func _mesh_instance(mesh: Mesh, color: Color, emission_energy: float, roughness: float, transparent: bool) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.material_override = _material(color, emission_energy, roughness, transparent)
+	return instance
+
+
+func _material(color: Color, emission_energy: float, roughness: float, transparent: bool) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = roughness
+	material.metallic = 0.08
+	if transparent or color.a < 1.0:
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if emission_energy > 0.0:
+		material.emission_enabled = true
+		material.emission = color
+		material.emission_energy_multiplier = emission_energy
+	return material
+
+
+func _world_pos(point: Vector2, height: float) -> Vector3:
+	var centered := point - ARENA_SIZE * 0.5
+	return Vector3(centered.x * WORLD_SCALE, height, centered.y * WORLD_SCALE)
+
+
+func _clear_visuals() -> void:
+	for enemy_id in enemy_nodes.keys():
+		var enemy_node = enemy_nodes[enemy_id]
+		enemy_node.queue_free()
+	enemy_nodes.clear()
+	for turret_id in turret_nodes.keys():
+		var turret_node = turret_nodes[turret_id]
+		turret_node.queue_free()
+	turret_nodes.clear()
+	for bullet_id in bullet_nodes.keys():
+		var bullet_node = bullet_nodes[bullet_id]
+		bullet_node.queue_free()
+	bullet_nodes.clear()
 
 
 func _update_ui() -> void:
 	var live_status := "LIVE" if not game_over else "ROUND OVER"
-	title_label.text = "CHAT DEFENSE"
+	title_label.text = "CHAT DEFENSE 3D"
 	status_label.text = "Status  %s\nRound   %d\nScore   %d\nBase    %.0f / %.0f HP\nTimer   %.1fs\nThreat  %d enemies\nQueue   %d events" % [
 		live_status,
 		round_index,
