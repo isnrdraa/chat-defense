@@ -15,13 +15,6 @@ const ARENA_SIZE := Vector2(1280, 720)
 const WORLD_SCALE := 0.032
 const PORT := 8787
 const MAX_QUEUE_SIZE := 40
-const BASE_TEXTURE: Texture2D = preload("res://assets/sprites/base_core.svg")
-const TURRET_TEXTURE: Texture2D = preload("res://assets/sprites/turret_guard.svg")
-const BULLET_TEXTURE: Texture2D = preload("res://assets/sprites/bullet_pulse.svg")
-const RUNNER_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_runner.svg")
-const TANK_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_tank.svg")
-const RANGED_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ranged.svg")
-const BOSS_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_boss.svg")
 
 const ACTION_COOLDOWNS := {
 	"heal_base": 0.8,
@@ -749,7 +742,7 @@ func _sync_turret_visuals() -> void:
 		var target := _find_nearest_enemy(turret["position"], turret["range"])
 		if not target.is_empty():
 			var look_target := _world_pos(target["position"], turret_node.position.y)
-			turret_head.look_at(look_target, Vector3.UP, true)
+			_yaw_towards(turret_head, look_target)
 		var glow := turret_node.get_node("Glow") as MeshInstance3D
 		var glow_material := glow.material_override as StandardMaterial3D
 		if bool(turret["temporary"]):
@@ -776,7 +769,10 @@ func _sync_enemy_visuals() -> void:
 		var hover := 0.08 * sin(pulse_time * 4.2 + float(enemy_id) * 0.4)
 		enemy_node.position = _world_pos(enemy["position"], 0.2 + hover)
 		var base_world := _world_pos(base_position, enemy_node.position.y)
-		enemy_node.look_at(Vector3(base_world.x, enemy_node.position.y, base_world.z), Vector3.UP, true)
+		_yaw_towards(enemy_node, Vector3(base_world.x, enemy_node.position.y, base_world.z))
+		var enemy_head := enemy_node.get_node_or_null("Head") as Node3D
+		if enemy_head != null:
+			_yaw_towards(enemy_head, Vector3(base_world.x, enemy_head.global_position.y, base_world.z))
 		var hp_ratio: float = clamp(float(enemy["hp"]) / float(ENEMY_LIBRARY[String(enemy["type"])]["hp"]), 0.0, 1.0)
 		var hp_fill := enemy_node.get_node("HP/Fill") as MeshInstance3D
 		hp_fill.scale.x = max(hp_ratio, 0.02)
@@ -843,10 +839,29 @@ func _make_base_node() -> Node3D:
 	ring.position = Vector3(0, -0.12, 0)
 	root.add_child(ring)
 
-	var core := _billboard_instance(BASE_TEXTURE, Vector2(3.8, 3.8), BASE_COLOR.lerp(Color.WHITE, 0.15), 0.5)
+	var core_mesh := CylinderMesh.new()
+	core_mesh.top_radius = 1.1
+	core_mesh.bottom_radius = 1.3
+	core_mesh.height = 1.3
+	var core := _mesh_instance(core_mesh, BASE_COLOR, 0.45, 0.26, false)
 	core.name = "Core"
-	core.position = Vector3(0, 1.55, -0.08)
+	core.position = Vector3(0, 0.88, 0)
 	root.add_child(core)
+
+	var core_cap_mesh := SphereMesh.new()
+	core_cap_mesh.radius = 0.72
+	core_cap_mesh.height = 1.35
+	var core_cap := _mesh_instance(core_cap_mesh, Color("ffd8c7"), 0.22, 0.18, false)
+	core_cap.position = Vector3(0, 1.72, 0)
+	root.add_child(core_cap)
+
+	var brace_mesh := BoxMesh.new()
+	brace_mesh.size = Vector3(0.24, 1.4, 0.24)
+	for angle in [0.0, 45.0, 90.0, 135.0]:
+		var brace := _mesh_instance(brace_mesh, Color("fff1dc"), 0.0, 0.28, false)
+		brace.position = Vector3(0, 1.12, 0)
+		brace.rotation_degrees = Vector3(0, angle, 0)
+		root.add_child(brace)
 
 	return root
 
@@ -878,9 +893,44 @@ func _make_turret_node(temporary: bool) -> Node3D:
 	head.position = Vector3(0, 0.42, 0)
 	root.add_child(head)
 
-	var head_body := _billboard_instance(TURRET_TEXTURE, Vector2(1.6, 1.6), base_color, 0.14 if temporary else 0.05)
-	head_body.position = Vector3(0, 0.52, -0.04)
+	var head_mesh := BoxMesh.new()
+	head_mesh.size = Vector3(0.78, 0.42, 0.98)
+	var head_body := _mesh_instance(head_mesh, base_color, 0.12 if temporary else 0.04, 0.3, false)
+	head_body.position = Vector3(0, 0.38, 0)
 	head.add_child(head_body)
+
+	var cheek_mesh := BoxMesh.new()
+	cheek_mesh.size = Vector3(0.16, 0.18, 0.56)
+	var left_cheek := _mesh_instance(cheek_mesh, Color("20303d"), 0.0, 0.38, false)
+	left_cheek.position = Vector3(-0.42, 0.38, -0.04)
+	head.add_child(left_cheek)
+	var right_cheek := _mesh_instance(cheek_mesh, Color("20303d"), 0.0, 0.38, false)
+	right_cheek.position = Vector3(0.42, 0.38, -0.04)
+	head.add_child(right_cheek)
+
+	var crown_mesh := BoxMesh.new()
+	crown_mesh.size = Vector3(0.44, 0.18, 0.44)
+	var crown := _mesh_instance(crown_mesh, Color("314455"), 0.0, 0.42, false)
+	crown.position = Vector3(0, 0.66, 0)
+	head.add_child(crown)
+
+	var barrel_mesh := CylinderMesh.new()
+	barrel_mesh.top_radius = 0.08
+	barrel_mesh.bottom_radius = 0.1
+	barrel_mesh.height = 1.25
+	var barrel := _mesh_instance(barrel_mesh, Color("223240"), 0.0, 0.24, false)
+	barrel.rotation_degrees = Vector3(90, 0, 0)
+	barrel.position = Vector3(0, 0.32, -0.88)
+	head.add_child(barrel)
+
+	var barrel_tip_mesh := CylinderMesh.new()
+	barrel_tip_mesh.top_radius = 0.12
+	barrel_tip_mesh.bottom_radius = 0.12
+	barrel_tip_mesh.height = 0.18
+	var barrel_tip := _mesh_instance(barrel_tip_mesh, base_color, 0.06 if temporary else 0.0, 0.24, false)
+	barrel_tip.rotation_degrees = Vector3(90, 0, 0)
+	barrel_tip.position = Vector3(0, 0.32, -1.5)
+	head.add_child(barrel_tip)
 
 	return root
 
@@ -892,27 +942,139 @@ func _make_enemy_node(kind: String, tint: Color) -> Node3D:
 		"tank":
 			var shadow_tank := _shadow_disc(0.88, 0.12)
 			root.add_child(shadow_tank)
-			var body := _billboard_instance(TANK_TEXTURE, Vector2(2.25, 2.25), tint, 0.18)
-			body.position = Vector3(0, 1.1, -0.05)
-			root.add_child(body)
+
+			var track_mesh := BoxMesh.new()
+			track_mesh.size = Vector3(0.32, 0.26, 1.7)
+			var left_track := _mesh_instance(track_mesh, Color("1b222a"), 0.0, 0.92, false)
+			left_track.position = Vector3(-0.54, 0.14, 0)
+			root.add_child(left_track)
+			var right_track := _mesh_instance(track_mesh, Color("1b222a"), 0.0, 0.92, false)
+			right_track.position = Vector3(0.54, 0.14, 0)
+			root.add_child(right_track)
+			for wheel_z in [-0.56, 0.0, 0.56]:
+				var wheel_mesh := CylinderMesh.new()
+				wheel_mesh.top_radius = 0.12
+				wheel_mesh.bottom_radius = 0.12
+				wheel_mesh.height = 0.08
+				var left_wheel := _mesh_instance(wheel_mesh, Color("38424b"), 0.0, 0.52, false)
+				left_wheel.rotation_degrees = Vector3(90, 0, 0)
+				left_wheel.position = Vector3(-0.54, 0.14, wheel_z)
+				root.add_child(left_wheel)
+				var right_wheel := _mesh_instance(wheel_mesh, Color("38424b"), 0.0, 0.52, false)
+				right_wheel.rotation_degrees = Vector3(90, 0, 0)
+				right_wheel.position = Vector3(0.54, 0.14, wheel_z)
+				root.add_child(right_wheel)
+
+			var hull_mesh := BoxMesh.new()
+			hull_mesh.size = Vector3(1.28, 0.5, 1.55)
+			var hull := _mesh_instance(hull_mesh, tint, 0.08, 0.42, false)
+			hull.position = Vector3(0, 0.34, 0)
+			root.add_child(hull)
+
+			var cabin_mesh := BoxMesh.new()
+			cabin_mesh.size = Vector3(0.86, 0.36, 0.82)
+			var cabin := _mesh_instance(cabin_mesh, tint.lerp(Color.WHITE, 0.12), 0.14, 0.34, false)
+			cabin.position = Vector3(0, 0.73, -0.03)
+			root.add_child(cabin)
+
+			var glacis_mesh := BoxMesh.new()
+			glacis_mesh.size = Vector3(1.08, 0.16, 0.46)
+			var glacis := _mesh_instance(glacis_mesh, tint.lerp(Color.BLACK, 0.08), 0.0, 0.3, false)
+			glacis.position = Vector3(0, 0.52, -0.52)
+			glacis.rotation_degrees = Vector3(-16, 0, 0)
+			root.add_child(glacis)
+
+			var turret_yaw := Node3D.new()
+			turret_yaw.name = "Head"
+			turret_yaw.position = Vector3(0, 0.72, -0.06)
+			root.add_child(turret_yaw)
+
+			var turret_mesh := CylinderMesh.new()
+			turret_mesh.top_radius = 0.34
+			turret_mesh.bottom_radius = 0.42
+			turret_mesh.height = 0.34
+			var turret := _mesh_instance(turret_mesh, Color("4d2015"), 0.0, 0.46, false)
+			turret.position = Vector3(0, 0.16, 0)
+			turret_yaw.add_child(turret)
+
+			var barrel_mesh_tank := CylinderMesh.new()
+			barrel_mesh_tank.top_radius = 0.08
+			barrel_mesh_tank.bottom_radius = 0.1
+			barrel_mesh_tank.height = 1.45
+			var cannon := _mesh_instance(barrel_mesh_tank, Color("ffe3d9"), 0.0, 0.22, false)
+			cannon.rotation_degrees = Vector3(90, 0, 0)
+			cannon.position = Vector3(0, 0.18, -0.96)
+			turret_yaw.add_child(cannon)
+			var cannon_tip_mesh := CylinderMesh.new()
+			cannon_tip_mesh.top_radius = 0.12
+			cannon_tip_mesh.bottom_radius = 0.12
+			cannon_tip_mesh.height = 0.18
+			var cannon_tip := _mesh_instance(cannon_tip_mesh, Color("fff0e8"), 0.0, 0.12, false)
+			cannon_tip.rotation_degrees = Vector3(90, 0, 0)
+			cannon_tip.position = Vector3(0, 0.18, -1.72)
+			turret_yaw.add_child(cannon_tip)
 		"ranged":
 			var shadow_ranged := _shadow_disc(0.68, 0.11)
 			root.add_child(shadow_ranged)
-			var body_ranged := _billboard_instance(RANGED_TEXTURE, Vector2(1.8, 1.8), tint, 0.24)
-			body_ranged.position = Vector3(0, 0.95, -0.04)
+			var body_capsule := CapsuleMesh.new()
+			body_capsule.radius = 0.34
+			body_capsule.height = 1.1
+			var body_ranged := _mesh_instance(body_capsule, tint, 0.16, 0.35, false)
+			body_ranged.position = Vector3(0, 0.68, 0)
 			root.add_child(body_ranged)
+
+			var head_orb_mesh := SphereMesh.new()
+			head_orb_mesh.radius = 0.3
+			head_orb_mesh.height = 0.6
+			var orb := _mesh_instance(head_orb_mesh, Color("e7fffb"), 0.42, 0.14, false)
+			orb.position = Vector3(0, 1.25, -0.08)
+			root.add_child(orb)
+
+			var wand_mesh := BoxMesh.new()
+			wand_mesh.size = Vector3(0.1, 0.1, 0.82)
+			var wand := _mesh_instance(wand_mesh, Color("dbf7ff"), 0.12, 0.18, false)
+			wand.position = Vector3(0, 0.94, -0.56)
+			root.add_child(wand)
 		"boss":
 			var shadow_boss := _shadow_disc(1.1, 0.14)
 			root.add_child(shadow_boss)
-			var core := _billboard_instance(BOSS_TEXTURE, Vector2(3.1, 3.1), tint, 0.38)
-			core.position = Vector3(0, 1.55, -0.08)
+			var core_mesh_boss := SphereMesh.new()
+			core_mesh_boss.radius = 0.94
+			core_mesh_boss.height = 1.85
+			var core := _mesh_instance(core_mesh_boss, tint, 0.34, 0.22, false)
+			core.position = Vector3(0, 1.04, 0)
 			root.add_child(core)
+
+			var inner_core_mesh := SphereMesh.new()
+			inner_core_mesh.radius = 0.44
+			inner_core_mesh.height = 0.88
+			var inner_core := _mesh_instance(inner_core_mesh, Color("ffd3e6"), 0.62, 0.1, false)
+			inner_core.position = Vector3(0, 1.1, -0.06)
+			root.add_child(inner_core)
+
+			var spike_mesh := BoxMesh.new()
+			spike_mesh.size = Vector3(0.16, 0.78, 0.16)
+			for angle in [0.0, 45.0, 90.0, 135.0]:
+				var spike := _mesh_instance(spike_mesh, Color("ffd3e6"), 0.08, 0.18, false)
+				spike.position = Vector3(0, 1.88, 0)
+				spike.rotation_degrees = Vector3(18, angle, 0)
+				root.add_child(spike)
 		_:
 			var shadow_runner := _shadow_disc(0.52, 0.1)
 			root.add_child(shadow_runner)
-			var runner_body := _billboard_instance(RUNNER_TEXTURE, Vector2(1.45, 1.45), tint, 0.14)
-			runner_body.position = Vector3(0, 0.8, -0.04)
+			var runner_capsule := CapsuleMesh.new()
+			runner_capsule.radius = 0.28
+			runner_capsule.height = 0.92
+			var runner_body := _mesh_instance(runner_capsule, tint, 0.1, 0.32, false)
+			runner_body.position = Vector3(0, 0.56, 0)
 			root.add_child(runner_body)
+
+			var runner_head_mesh := SphereMesh.new()
+			runner_head_mesh.radius = 0.2
+			runner_head_mesh.height = 0.4
+			var runner_head := _mesh_instance(runner_head_mesh, Color("e9fff1"), 0.04, 0.16, false)
+			runner_head.position = Vector3(0, 1.08, -0.06)
+			root.add_child(runner_head)
 
 	var hp_root := Node3D.new()
 	hp_root.name = "HP"
@@ -939,8 +1101,10 @@ func _make_bullet_node() -> Node3D:
 	var halo := _shadow_disc(0.18, 0.09)
 	halo.position.y = -0.42
 	root.add_child(halo)
-	var sphere := _billboard_instance(BULLET_TEXTURE, Vector2(0.72, 0.72), BULLET_COLOR, 0.95)
-	sphere.position = Vector3(0, 0.04, 0)
+	var sphere_mesh := SphereMesh.new()
+	sphere_mesh.radius = 0.15
+	sphere_mesh.height = 0.3
+	var sphere := _mesh_instance(sphere_mesh, BULLET_COLOR, 0.95, 0.08, false)
 	root.add_child(sphere)
 	return root
 
@@ -949,16 +1113,6 @@ func _mesh_instance(mesh: Mesh, color: Color, emission_energy: float, roughness:
 	var instance := MeshInstance3D.new()
 	instance.mesh = mesh
 	instance.material_override = _material(color, emission_energy, roughness, transparent)
-	return instance
-
-
-func _billboard_instance(texture: Texture2D, size: Vector2, modulate: Color, emission_energy: float) -> MeshInstance3D:
-	var quad := QuadMesh.new()
-	quad.size = size
-	var instance := MeshInstance3D.new()
-	instance.mesh = quad
-	instance.material_override = _sprite_material(texture, modulate, emission_energy)
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return instance
 
 
@@ -988,26 +1142,17 @@ func _material(color: Color, emission_energy: float, roughness: float, transpare
 	return material
 
 
-func _sprite_material(texture: Texture2D, modulate: Color, emission_energy: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_texture = texture
-	material.albedo_color = modulate
-	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	material.no_depth_test = false
-	if emission_energy > 0.0:
-		material.emission_enabled = true
-		material.emission = modulate
-		material.emission_energy_multiplier = emission_energy
-	return material
-
-
 func _world_pos(point: Vector2, height: float) -> Vector3:
 	var centered := point - ARENA_SIZE * 0.5
 	return Vector3(centered.x * WORLD_SCALE, height, centered.y * WORLD_SCALE)
+
+
+func _yaw_towards(node: Node3D, target: Vector3) -> void:
+	var local_target := target - node.global_position
+	local_target.y = 0.0
+	if local_target.length_squared() <= 0.0001:
+		return
+	node.rotation.y = atan2(local_target.x, local_target.z)
 
 
 func _clear_visuals() -> void:
