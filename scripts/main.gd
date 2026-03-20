@@ -15,6 +15,13 @@ const ARENA_SIZE := Vector2(1280, 720)
 const WORLD_SCALE := 0.032
 const PORT := 8787
 const MAX_QUEUE_SIZE := 40
+const BASE_TEXTURE: Texture2D = preload("res://assets/sprites/base_core.svg")
+const TURRET_TEXTURE: Texture2D = preload("res://assets/sprites/turret_guard.svg")
+const BULLET_TEXTURE: Texture2D = preload("res://assets/sprites/bullet_pulse.svg")
+const RUNNER_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_runner.svg")
+const TANK_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_tank.svg")
+const RANGED_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ranged.svg")
+const BOSS_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_boss.svg")
 
 const ACTION_COOLDOWNS := {
 	"heal_base": 0.8,
@@ -217,9 +224,9 @@ func _create_world() -> void:
 
 	battle_camera = Camera3D.new()
 	battle_camera.current = true
-	battle_camera.fov = 42.0
-	battle_camera.position = Vector3(0, 18.5, 16.0)
-	battle_camera.rotation_degrees = Vector3(-52, 0, 0)
+	battle_camera.fov = 36.0
+	battle_camera.position = Vector3(0, 17.0, 14.2)
+	battle_camera.rotation_degrees = Vector3(-56, 0, 0)
 	camera_rig.add_child(battle_camera)
 
 	var sun := DirectionalLight3D.new()
@@ -836,21 +843,10 @@ func _make_base_node() -> Node3D:
 	ring.position = Vector3(0, -0.12, 0)
 	root.add_child(ring)
 
-	var core_mesh := SphereMesh.new()
-	core_mesh.radius = 0.92
-	core_mesh.height = 1.7
-	var core := _mesh_instance(core_mesh, BASE_COLOR, 0.65, 0.2, false)
+	var core := _billboard_instance(BASE_TEXTURE, Vector2(3.8, 3.8), BASE_COLOR.lerp(Color.WHITE, 0.15), 0.5)
 	core.name = "Core"
-	core.position = Vector3(0, 0.92, 0)
+	core.position = Vector3(0, 1.55, -0.08)
 	root.add_child(core)
-
-	var crown_mesh := BoxMesh.new()
-	crown_mesh.size = Vector3(0.28, 1.45, 0.28)
-	for angle in [0.0, 45.0, 90.0, 135.0]:
-		var crown := _mesh_instance(crown_mesh, Color("ffe5d6"), 0.0, 0.28, false)
-		crown.position = Vector3(0, 1.15, 0)
-		crown.rotation_degrees = Vector3(0, angle, 0)
-		root.add_child(crown)
 
 	return root
 
@@ -868,33 +864,23 @@ func _make_turret_node(temporary: bool) -> Node3D:
 	glow.position = Vector3(0, -0.07, 0)
 	root.add_child(glow)
 
-	var base_mesh := CylinderMesh.new()
-	base_mesh.top_radius = 0.48
-	base_mesh.bottom_radius = 0.58
-	base_mesh.height = 0.46
+	var pedestal_mesh := CylinderMesh.new()
+	pedestal_mesh.top_radius = 0.42
+	pedestal_mesh.bottom_radius = 0.58
+	pedestal_mesh.height = 0.3
 	var base_color := Color("6fffe9") if temporary else Color("f4f1de")
-	var base := _mesh_instance(base_mesh, base_color, 0.1 if temporary else 0.0, 0.46, false)
-	base.position = Vector3(0, 0.2, 0)
+	var base := _mesh_instance(pedestal_mesh, Color("20303d"), 0.0, 0.52, false)
+	base.position = Vector3(0, 0.12, 0)
 	root.add_child(base)
 
 	var head := Node3D.new()
 	head.name = "Head"
-	head.position = Vector3(0, 0.48, 0)
+	head.position = Vector3(0, 0.42, 0)
 	root.add_child(head)
 
-	var head_mesh := BoxMesh.new()
-	head_mesh.size = Vector3(0.42, 0.26, 0.54)
-	var head_body := _mesh_instance(head_mesh, Color("314455"), 0.0, 0.48, false)
+	var head_body := _billboard_instance(TURRET_TEXTURE, Vector2(1.6, 1.6), base_color, 0.14 if temporary else 0.05)
+	head_body.position = Vector3(0, 0.52, -0.04)
 	head.add_child(head_body)
-
-	var barrel_mesh := CylinderMesh.new()
-	barrel_mesh.top_radius = 0.08
-	barrel_mesh.bottom_radius = 0.08
-	barrel_mesh.height = 0.9
-	var barrel := _mesh_instance(barrel_mesh, base_color, 0.08 if temporary else 0.0, 0.3, false)
-	barrel.rotation_degrees = Vector3(90, 0, 0)
-	barrel.position = Vector3(0, 0.02, -0.5)
-	head.add_child(barrel)
 
 	return root
 
@@ -904,68 +890,29 @@ func _make_enemy_node(kind: String, tint: Color) -> Node3D:
 
 	match kind:
 		"tank":
-			var body_mesh := BoxMesh.new()
-			body_mesh.size = Vector3(1.2, 0.8, 1.45)
-			var body := _mesh_instance(body_mesh, tint, 0.18, 0.58, false)
-			body.position = Vector3(0, 0.46, 0)
+			var shadow_tank := _shadow_disc(0.88, 0.12)
+			root.add_child(shadow_tank)
+			var body := _billboard_instance(TANK_TEXTURE, Vector2(2.25, 2.25), tint, 0.18)
+			body.position = Vector3(0, 1.1, -0.05)
 			root.add_child(body)
-
-			var turret_mesh := CylinderMesh.new()
-			turret_mesh.top_radius = 0.34
-			turret_mesh.bottom_radius = 0.42
-			turret_mesh.height = 0.42
-			var turret := _mesh_instance(turret_mesh, Color("552214"), 0.0, 0.64, false)
-			turret.position = Vector3(0, 0.95, -0.08)
-			root.add_child(turret)
-
-			var horn_mesh := BoxMesh.new()
-			horn_mesh.size = Vector3(0.2, 0.2, 0.8)
-			var horn := _mesh_instance(horn_mesh, Color("ffe3d9"), 0.0, 0.28, false)
-			horn.position = Vector3(0, 0.96, -0.65)
-			root.add_child(horn)
 		"ranged":
-			var body_capsule := CapsuleMesh.new()
-			body_capsule.radius = 0.42
-			body_capsule.height = 1.15
-			var body_ranged := _mesh_instance(body_capsule, tint, 0.24, 0.42, false)
-			body_ranged.position = Vector3(0, 0.72, 0)
+			var shadow_ranged := _shadow_disc(0.68, 0.11)
+			root.add_child(shadow_ranged)
+			var body_ranged := _billboard_instance(RANGED_TEXTURE, Vector2(1.8, 1.8), tint, 0.24)
+			body_ranged.position = Vector3(0, 0.95, -0.04)
 			root.add_child(body_ranged)
-
-			var orb_mesh := SphereMesh.new()
-			orb_mesh.radius = 0.18
-			orb_mesh.height = 0.36
-			var orb := _mesh_instance(orb_mesh, Color("e7fffb"), 0.7, 0.1, false)
-			orb.position = Vector3(0, 1.38, -0.12)
-			root.add_child(orb)
 		"boss":
-			var core_mesh := SphereMesh.new()
-			core_mesh.radius = 0.88
-			core_mesh.height = 1.76
-			var core := _mesh_instance(core_mesh, tint, 0.52, 0.22, false)
-			core.position = Vector3(0, 1.08, 0)
+			var shadow_boss := _shadow_disc(1.1, 0.14)
+			root.add_child(shadow_boss)
+			var core := _billboard_instance(BOSS_TEXTURE, Vector2(3.1, 3.1), tint, 0.38)
+			core.position = Vector3(0, 1.55, -0.08)
 			root.add_child(core)
-
-			var crown_mesh := BoxMesh.new()
-			crown_mesh.size = Vector3(0.16, 0.86, 0.16)
-			for angle in [0.0, 45.0, 90.0, 135.0]:
-				var spike := _mesh_instance(crown_mesh, Color("ffd3e6"), 0.1, 0.24, false)
-				spike.position = Vector3(0, 1.8, 0)
-				spike.rotation_degrees = Vector3(18, angle, 0)
-				root.add_child(spike)
 		_:
-			var runner_capsule := CapsuleMesh.new()
-			runner_capsule.radius = 0.3
-			runner_capsule.height = 0.92
-			var runner_body := _mesh_instance(runner_capsule, tint, 0.16, 0.35, false)
-			runner_body.position = Vector3(0, 0.58, 0)
+			var shadow_runner := _shadow_disc(0.52, 0.1)
+			root.add_child(shadow_runner)
+			var runner_body := _billboard_instance(RUNNER_TEXTURE, Vector2(1.45, 1.45), tint, 0.14)
+			runner_body.position = Vector3(0, 0.8, -0.04)
 			root.add_child(runner_body)
-
-			var runner_head_mesh := SphereMesh.new()
-			runner_head_mesh.radius = 0.18
-			runner_head_mesh.height = 0.36
-			var runner_head := _mesh_instance(runner_head_mesh, Color("e9fff1"), 0.0, 0.2, false)
-			runner_head.position = Vector3(0, 1.1, -0.08)
-			root.add_child(runner_head)
 
 	var hp_root := Node3D.new()
 	hp_root.name = "HP"
@@ -989,18 +936,12 @@ func _make_enemy_node(kind: String, tint: Color) -> Node3D:
 
 func _make_bullet_node() -> Node3D:
 	var root := Node3D.new()
-	var sphere_mesh := SphereMesh.new()
-	sphere_mesh.radius = 0.16
-	sphere_mesh.height = 0.32
-	var sphere := _mesh_instance(sphere_mesh, BULLET_COLOR, 0.95, 0.08, false)
-	root.add_child(sphere)
-
-	var halo_mesh := SphereMesh.new()
-	halo_mesh.radius = 0.24
-	halo_mesh.height = 0.48
-	var halo := _mesh_instance(halo_mesh, Color(BULLET_COLOR.r, BULLET_COLOR.g, BULLET_COLOR.b, 0.16), 0.4, 0.05, true)
-	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var halo := _shadow_disc(0.18, 0.09)
+	halo.position.y = -0.42
 	root.add_child(halo)
+	var sphere := _billboard_instance(BULLET_TEXTURE, Vector2(0.72, 0.72), BULLET_COLOR, 0.95)
+	sphere.position = Vector3(0, 0.04, 0)
+	root.add_child(sphere)
 	return root
 
 
@@ -1009,6 +950,27 @@ func _mesh_instance(mesh: Mesh, color: Color, emission_energy: float, roughness:
 	instance.mesh = mesh
 	instance.material_override = _material(color, emission_energy, roughness, transparent)
 	return instance
+
+
+func _billboard_instance(texture: Texture2D, size: Vector2, modulate: Color, emission_energy: float) -> MeshInstance3D:
+	var quad := QuadMesh.new()
+	quad.size = size
+	var instance := MeshInstance3D.new()
+	instance.mesh = quad
+	instance.material_override = _sprite_material(texture, modulate, emission_energy)
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return instance
+
+
+func _shadow_disc(radius: float, alpha: float) -> MeshInstance3D:
+	var disc_mesh := CylinderMesh.new()
+	disc_mesh.top_radius = radius
+	disc_mesh.bottom_radius = radius
+	disc_mesh.height = 0.02
+	var disc := _mesh_instance(disc_mesh, Color(0, 0, 0, alpha), 0.0, 1.0, true)
+	disc.position = Vector3(0, -0.02, 0)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return disc
 
 
 func _material(color: Color, emission_energy: float, roughness: float, transparent: bool) -> StandardMaterial3D:
@@ -1022,6 +984,23 @@ func _material(color: Color, emission_energy: float, roughness: float, transpare
 	if emission_energy > 0.0:
 		material.emission_enabled = true
 		material.emission = color
+		material.emission_energy_multiplier = emission_energy
+	return material
+
+
+func _sprite_material(texture: Texture2D, modulate: Color, emission_energy: float) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_texture = texture
+	material.albedo_color = modulate
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	material.no_depth_test = false
+	if emission_energy > 0.0:
+		material.emission_enabled = true
+		material.emission = modulate
 		material.emission_energy_multiplier = emission_energy
 	return material
 
